@@ -1,6 +1,4 @@
-Here’s a **GitHub-ready, professional README** (with badges, clean formatting, and project polish 👇):
 
----
 
 # 🎙️ Swar Connect
 
