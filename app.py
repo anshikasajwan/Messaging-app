@@ -1,122 +1,188 @@
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder
+from googletrans import Translator
+from gtts import gTTS
+import speech_recognition as sr
+import io
 import datetime
+import time
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Communicate Pro v3", layout="centered")
+# --- 1. SHARED GLOBAL ENGINE (Cloud Relay) ---
+@st.cache_resource
+def get_global_vault():
+    return {}
 
-# --- DATABASE SIMULATION ---
-if "message_vault" not in st.session_state:
-    st.session_state.message_vault = {} 
-if "logged_in_user" not in st.session_state:
-    st.session_state.logged_in_user = None
-if "user_lang" not in st.session_state:
-    st.session_state.user_lang = "English" # Default Language
-if "current_view" not in st.session_state:
-    st.session_state.current_view = "login"
+global_vault = get_global_vault()
 
-# --- 1. LOGIN INTERFACE ---
-if st.session_state.current_view == "login":
-    st.title("🎙️ Communicate Audio")
-    name_input = st.text_input("Please enter your full name:")
-    
-    # Pre-setting the language selection for the Sender/Receiver
-    selected_lang = st.selectbox("Select your preferred language:", ["English"])
-    
-    if st.button("Enter System"):
-        if name_input:
-            st.session_state.logged_in_user = name_input.strip()
-            st.session_state.user_lang = selected_lang
-            st.session_state.current_view = "dashboard"
-            if st.session_state.logged_in_user not in st.session_state.message_vault:
-                st.session_state.message_vault[st.session_state.logged_in_user] = None
-            st.rerun()
+# --- 2. BACKEND AI ENGINE (Corrected Logic) ---
+from httpx import Timeout # Add this at the very top with your imports
 
-# --- 2. PERSONALIZED DASHBOARD ---
-elif st.session_state.current_view == "dashboard":
-    user = st.session_state.logged_in_user
-    lang = st.session_state.user_lang
-    st.title(f"👋 Hello, {user}!")
-    st.write(f"Your Language: **{lang}**")
+def backend_process_all_langs(audio_bytes):
+    iso_map = {
+        "Hindi": "hi", "English": "en", "Bengali": "bn", "Malayalam": "ml",
+        "Odia": "or", "Assamese": "as", "Marathi": "mr", "Tamil": "ta",
+        "Gujarati": "gu", "Punjabi": "pa", "Rajasthani": "hi"
+    }
     
-    incoming = st.session_state.message_vault.get(user)
-    if incoming:
-        st.warning(f"🔔 Notification: 1 unheard message from {incoming['sender']} (Language: {incoming['lang']})")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📤 Send a Message", use_container_width=True):
-            st.session_state.current_view = "sender"
-            st.rerun()
-    with col2:
-        if st.button("📥 Receive Messages", use_container_width=True):
-            st.session_state.current_view = "receiver"
-            st.rerun()
-            
-    if st.button("Logout", type="primary"):
-        st.session_state.logged_in_user = None
-        st.session_state.current_view = "login"
-        st.rerun()
+    results = {}
+    try:
+        recognizer = sr.Recognizer()
+        audio_file = io.BytesIO(audio_bytes)
+        with sr.AudioFile(audio_file) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = recognizer.record(source)
+        
+        # 1. ASR (Speech to Text)
+        source_text = recognizer.recognize_google(audio_data, language="en-IN")
+        
+        if not source_text:
+            return "Error: No speech detected.", None
 
-# --- 3. SENDER INTERFACE ---
-elif st.session_state.current_view == "sender":
-    st.header("📤 Outgoing Message")
-    recipient = st.text_input("Enter Recipient Name:")
-    
-    # Metadata for the message
-    st.write(f"Source Language: **{st.session_state.user_lang}**")
-    
-    audio_data = mic_recorder(start_prompt="Record", stop_prompt="Stop & Preview", key='send_rec')
-    
-    if audio_data:
-        st.audio(audio_data['bytes'])
-        if recipient and st.button("Confirm & Send"):
-            st.session_state.message_vault[recipient] = {
-                "bytes": audio_data["bytes"],
-                "sender": st.session_state.logged_in_user,
-                "lang": st.session_state.user_lang, # Attaching language data
-                "time": datetime.datetime.now().strftime("%H:%M")
-            }
-            st.success(f"Sent to {recipient}!")
-            
-    if st.button("⬅️ Back"):
-        st.session_state.current_view = "dashboard"
-        st.rerun()
+        # 2. Setup Translator with a longer timeout (20 seconds)
+        # This prevents the "Read operation timed out" error
+        translator = Translator(timeout=Timeout(20.0))
+        
+        for lang_name, lang_code in iso_map.items():
+            try:
+                # Translate Text
+                translation = translator.translate(source_text, dest=lang_code)
+                translated_text = str(translation.text)
+                
+                # Generate Audio
+                tts = gTTS(text=translated_text, lang=lang_code)
+                tts_buffer = io.BytesIO()
+                tts.write_to_fp(tts_buffer)
+                
+                results[lang_name] = {
+                    "transcript": translated_text,
+                    "audio": tts_buffer.getvalue()
+                }
+                
+                # 💡 Crucial: Small pause so Google doesn't time us out
+                time.sleep(0.2) 
+                
+            except Exception as lang_err:
+                print(f"Skipping {lang_name}: {lang_err}")
+                continue
+        
+        return source_text, results
+    except Exception as e:
+        return f"Connection Error: {str(e)}", None
 
-# --- 4. RECEIVER INTERFACE ---
-elif st.session_state.current_view == "receiver":
-    st.header(f"📥 {st.session_state.logged_in_user}'s Inbox")
-    
-    # NEW: Receiver sets their listening preference
-    st.subheader("Listening Settings")
-    listen_lang = st.selectbox(
-        "I want to listen to my messages in:", 
-        ["English", "Hindi", "Marathi", "Tamil"], 
-        key="receiver_lang_pref"
-    )
-    
-    st.divider()
+# --- 3. UI STYLING (The "Anshika" Smartphone Theme) ---
+BRIGHT_STYLE = """
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap');
+    html, body, [class*="st-"] { font-family: 'Outfit', sans-serif; }
+    h1, h2, h3, p, label, .stMarkdown p { color: #000000 !important; font-weight: 800 !important; }
 
-    msg = st.session_state.message_vault.get(st.session_state.logged_in_user)
+    .stApp {
+        max-width: 340px !important; height: 720px !important; 
+        margin: 10px auto !important; border: 10px solid #1e1e2e !important; 
+        border-radius: 40px !important; background: #ffffff !important;
+        overflow-y: auto !important; overflow-x: hidden !important;
+    }
+
+    .stButton>button {
+        border-radius: 25px !important;
+        background: linear-gradient(45deg, #00AD5F, #00FF95) !important;
+        color: white !important; font-weight: 700 !important; border: none !important;
+    }
     
+    .mobile-status-bar {
+        position: absolute; top: -35px; right: 10px; z-index: 10000;
+        font-size: 11px; font-weight: 900; color: #000;
+    }
+    .header-box { margin-top: 5px; display: flex; justify-content: space-between; align-items: center; width: 100%; }
+    header, footer { visibility: hidden; }
+</style>
+"""
+
+st.set_page_config(page_title="Indian lingual", layout="centered")
+st.markdown(BRIGHT_STYLE, unsafe_allow_html=True)
+
+# --- 4. RENDER STATUS BAR & HEADER ---
+st.markdown(f'<div class="mobile-status-bar">{datetime.datetime.now().strftime("%I:%M %p")} 📶 🔋 100%</div>', unsafe_allow_html=True)
+
+st.markdown('<div class="header-box">', unsafe_allow_html=True)
+col_text, col_img = st.columns([3, 1])
+with col_text:
+    st.markdown("<h2 style='color:#000; margin:0; line-height:1.1;'>SWAR<br>CONNECT</h2>", unsafe_allow_html=True)
+with col_img:
+    st.image("WhatsApp Image 2026-04-02 at 23.41.07.jpeg", width=80)
+st.markdown('</div>', unsafe_allow_html=True)
+
+tab_send, tab_receive = st.tabs(["🚀 SEND", "📥 RECEIVE"])
+
+# ---------------------------------------------------------
+# TAB 1: SENDER (FIXED CALL NAME)
+# ---------------------------------------------------------
+with tab_send:
+    st.image("https://img.icons8.com/fluency/96/rocket.png", width=60)
+    target_user = st.text_input("RECEIVER'S ID:", placeholder="e.g. User_2")
+    
+    with st.container(border=True):
+        st.write("🎙️ **RECORDING BOOTH**")
+        audio = mic_recorder(start_prompt="⏺️ RECORD", stop_prompt="⏹️ STOP", key='v60_mic', format="wav")
+        
+        if audio:
+            st.audio(audio['bytes'])
+            if st.button("🚀 BLAST MESSAGE!", use_container_width=True):
+                if target_user:
+                    with st.spinner("Backend AI Translating..."):
+                        # SYNCED NAME: backend_process_all_langs
+                        orig_text, translations = backend_process_all_langs(audio['bytes'])
+                        
+                        if translations:
+                            global_vault[target_user.strip()] = {
+                                "original_audio": audio['bytes'],
+                                "original_text": orig_text,
+                                "translations": translations,
+                                "sender": "Anshika",
+                                "time": datetime.datetime.now().strftime("%I:%M %p")
+                            }
+                            st.balloons() 
+                            st.toast("Transmission Verified! 🎈")
+                        else:
+                            st.error(orig_text)
+                else:
+                    st.error("Missing Target ID!")
+
+# ---------------------------------------------------------
+# TAB 2: RECEIVER (Instant Translation)
+# ---------------------------------------------------------
+with tab_receive:
+    st.image("https://img.icons8.com/fluency/96/mailbox-closed-flag-up.png", width=60)
+    my_id = st.text_input("MY ACCOUNT ID:", placeholder="e.g. User_2")
+    
+    lang_list = ["Hindi", "English", "Bengali", "Malayalam", "Odia", "Assamese", "Marathi", "Tamil", "Gujarati", "Punjabi", "Rajasthani"]
+    chosen_lang = st.selectbox("PREFERED LANGUAGE:", lang_list)
+    
+    msg = global_vault.get(my_id.strip())
+
     if msg:
-        st.write(f"📩 **New Message from {msg['sender']}**")
-        st.write(f"Original Language: **{msg['lang']}**")
-        st.write(f"Target Playback: **{listen_lang}**")
-        
-        # LOGIC: If languages don't match, we show a "Translation Needed" indicator
-        if msg['lang'] != listen_lang:
-            st.warning(f"🔄 Translation Required: {msg['lang']} ➔ {listen_lang}")
-            st.info("System Note: In Phase 2, the NMT model will process this audio.")
-        
-        st.audio(msg['bytes'])
-        
-        if st.button("Mark as Heard & Delete", type="primary"):
-            st.session_state.message_vault[st.session_state.logged_in_user] = None
+        with st.container(border=True):
+            st.write(f"📥 **FROM: {msg['sender']}**")
+            
+            # Retrieve the pre-translated data from the vault
+            lang_data = msg['translations'].get(chosen_lang)
+            
+            if lang_data:
+                st.write(f"🗣️ **Translated Voice ({chosen_lang}):**")
+                st.audio(lang_data['audio'])
+                
+                # Visual Transcript Card
+                st.markdown(f"""
+                    <div style="background:#f0fff4; border-left:6px solid #00AD5F; padding:12px; border-radius:10px; margin-top:10px;">
+                        <p style="color:#666; font-size:11px; margin:0;">Input: "{msg['original_text']}"</p>
+                        <p style="color:#000; font-size:15px; margin:5px 0;"><b>{chosen_lang}: "{lang_data['transcript']}"</b></p>
+                    </div>
+                """, unsafe_allow_html=True)
+
+        if st.button("🗑️ CLEAR INBOX", use_container_width=True):
+            global_vault.pop(my_id.strip(), None)
             st.rerun()
     else:
-        st.info("Your inbox is empty.")
-        
-    if st.button("⬅️ Back to Dashboard"):
-        st.session_state.current_view = "dashboard"
+        st.info("📡 SCANNING NETWORK...")
+        time.sleep(4)
         st.rerun()
