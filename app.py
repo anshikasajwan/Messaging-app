@@ -15,7 +15,7 @@ def get_global_vault():
 global_vault = get_global_vault()
 
 # --- 2. BACKEND AI ENGINE (Corrected Logic) ---
-from httpx import Timeout # Add this at the very top with your imports
+from httpx import Timeout 
 
 def backend_process_all_langs(audio_bytes):
     iso_map = {
@@ -39,7 +39,7 @@ def backend_process_all_langs(audio_bytes):
             return "Error: No speech detected.", None
 
         # 2. Setup Translator with a longer timeout (20 seconds)
-        # This prevents the "Read operation timed out" error
+        
         translator = Translator(timeout=Timeout(20.0))
         
         for lang_name, lang_code in iso_map.items():
@@ -58,7 +58,6 @@ def backend_process_all_langs(audio_bytes):
                     "audio": tts_buffer.getvalue()
                 }
                 
-                # 💡 Crucial: Small pause so Google doesn't time us out
                 time.sleep(0.2) 
                 
             except Exception as lang_err:
@@ -69,7 +68,7 @@ def backend_process_all_langs(audio_bytes):
     except Exception as e:
         return f"Connection Error: {str(e)}", None
 
-# --- 3. UI STYLING (The "Anshika" Smartphone Theme) ---
+# --- 3. UI STYLING (Smartphone Theme) ---
 BRIGHT_STYLE = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap');
